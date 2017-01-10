@@ -4,6 +4,9 @@ resources:
   virt:
   - name: mgmt4
     uri: 'qemu:///session'
+    cpus: 1
+    maxcpus: 4
+    memory: 524288
     boot:
     - hd
     disk:

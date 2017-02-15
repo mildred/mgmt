@@ -5,7 +5,8 @@ After=systemd-networkd.service
 Requires=systemd-networkd.service
 
 [Service]
-ExecStart=/usr/bin/mgmt run ${OPTS}
+Environment="OPTS=--yaml /etc/mgmt.yaml"
+ExecStart=/usr/bin/mgmt run $OPTS
 RestartSec=5s
 Restart=always
 

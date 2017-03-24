@@ -59,6 +59,11 @@ rm -rf "$T"
 
 DELTA=$(printf "%.0f\n" `echo - | awk "{ print (($COUNT - $COUNT1) / $DIFF1) * 100 }"`)
 
+echo "$LINT"  | sort >/tmp/$$.lint.0
+echo "$LINT1" | sort >/tmp/$$.lint.1
+diff -u /tmp/$$.lint.0 /tmp/$$.lint.1
+rm -f /tmp/$$.lint.0 /tmp/$$.lint.1
+
 echo "Lines of code: $DIFF1"
 echo "Prev. # of issues: $COUNT1"
 echo "Curr. # of issues: $COUNT"

@@ -26,7 +26,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/purpleidea/mgmt/yamlgraph"
+	yamlgraph "github.com/purpleidea/mgmt/yamlgraph2"
 )
 
 const (

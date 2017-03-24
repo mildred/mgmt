@@ -64,7 +64,7 @@ import (
 	cv "github.com/purpleidea/mgmt/converger"
 	"github.com/purpleidea/mgmt/util"
 	"github.com/purpleidea/mgmt/util/semaphore"
-	"github.com/purpleidea/mgmt/yamlgraph"
+	yamlgraph "github.com/purpleidea/mgmt/yamlgraph2"
 
 	multierr "github.com/hashicorp/go-multierror"
 	"github.com/howeyc/gopass"

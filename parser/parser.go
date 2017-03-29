@@ -34,8 +34,12 @@ type Error struct {
 	Message string
 }
 
+func (err *Error) Error() string {
+	return err.String()
+}
+
 func (err *Error) String() string {
-	return fmt.Sprintf(":%d:%d: %d", err.Line, err.Column)
+	return fmt.Sprintf(":%d:%d: %s", err.Line, err.Column, err.Message)
 }
 
 type Resource struct {
@@ -55,9 +59,10 @@ type Binding struct {
 
 type Expr struct {
 	Location
-	Type   ExprType
-	String string
-	Args   []*Expr
+	Type     ExprType
+	String   string
+	Args     []*Expr
+	Bindings map[string]*Binding
 }
 
 type ExprType int
@@ -67,6 +72,8 @@ const (
 	ExprVariable
 	ExprFuncCall
 	ExprChain
+	ExprArray
+	ExprObject
 )
 
 func (res *Resource) init() {
@@ -77,13 +84,15 @@ func (res *Resource) init() {
 
 //++ file          -> res_content
 func (p *Parser) Parse() {
-	p.parseResourceContent(p.Root)
+	p.parseResourceContent(p.Root, p.Root.Bindings)
 }
 
 //++ res_content   -> { binding | resource }
-//++ binding       -> identifier '=' expr
+//++ binding       -> identifier ('+=' | '=') expr [ ',' ]
+//++ obj_content   -> { binding }
 //++ resource      -> identifier { literal } [ expr_list ] '{' res_content '}'
-func (p *Parser) parseResourceContent(res *Resource) {
+func (p *Parser) parseResourceContent(res *Resource, bindings map[string]*Binding) {
+loop:
 	for {
 		var id string
 		p.parseSpaces()
@@ -106,20 +115,70 @@ func (p *Parser) parseResourceContent(res *Resource) {
 		switch c {
 		case 0:
 			return
-		case '=':
-			p.incr(1)
+		case '+':
+			oploc := p.location()
+			if p.get(1) == '=' {
+				p.incr(2)
+			} else {
+				p.addError(oploc, "Incorrect binding operator '+'")
+				p.incr(1)
+			}
+			p.debug("expr(+=)")
 			expr := p.parseExpr(false)
 			if expr == nil {
 				p.addError(p.location(), "Expected expression")
 				continue
+			}
+			b, ok := bindings[id]
+			if !ok {
+				b := &Binding{
+					Location: loc,
+					Name:     id,
+					Expr: &Expr{
+						Location: oploc,
+						Type:     ExprArray,
+						Args:     []*Expr{expr},
+					},
+				}
+				bindings[id] = b
+			} else if b.Expr.Type != ExprArray {
+				b.Expr = &Expr{
+					Location: oploc,
+					Type:     ExprArray,
+					Args:     []*Expr{b.Expr, expr},
+				}
+			} else {
+				b.Expr.Args = append(b.Expr.Args, expr)
+			}
+			p.parseSpaces()
+			if p.get(0) == ',' {
+				p.incr(1)
+			}
+
+		case '=':
+			p.incr(1)
+			p.debug("expr(=)")
+			expr := p.parseExpr(false)
+			if expr == nil {
+				p.addError(p.location(), "Expected expression")
+				continue
+			}
+			p.parseSpaces()
+			if p.get(0) == ',' {
+				p.incr(1)
 			}
 			b := &Binding{
 				Location: loc,
 				Name:     id,
 				Expr:     expr,
 			}
-			res.Bindings[id] = b
+			bindings[id] = b
 		default:
+			if res == nil {
+				p.addError(p.location(), "Expected operator after identifier for binding")
+				p.addError(loc, "identifier is here")
+				continue loop
+			}
 			r := &Resource{
 				Name:     id,
 				Location: loc,
@@ -127,6 +186,7 @@ func (p *Parser) parseResourceContent(res *Resource) {
 			r.init()
 			res.Resources = append(res.Resources, r)
 			for {
+				p.debug("expr(resource literal)")
 				lit := p.parseExpr(true)
 				if lit == nil {
 					break
@@ -140,10 +200,11 @@ func (p *Parser) parseResourceContent(res *Resource) {
 			}
 			if p.get(0) == '{' {
 				p.incr(1)
-				p.parseResourceContent(r)
+				p.parseResourceContent(r, r.Bindings)
 				p.locationEnd(&r.Location)
 				p.parseSpaces()
 				if p.get(0) == '}' {
+					p.locationEnd(&r.Location)
 					p.incr(1)
 				}
 			} else {
@@ -156,8 +217,11 @@ func (p *Parser) parseResourceContent(res *Resource) {
 
 //++ expr          -> literal
 //++                | function_call
+//++                | '{' obj_content '}'
+//++                | expr_array
 //++                | expr '.' identifier
-//++ literal       -> string | variable
+//++ literal       -> string
+//++                | variable
 //++ variable      -> identifier
 //++ function_call -> identifier expr_list
 func (p *Parser) parseExpr(literal bool) *Expr {
@@ -179,6 +243,32 @@ func (p *Parser) parseExpr(literal bool) *Expr {
 		p.locationEnd(&e.Location)
 		if literal {
 			return e
+		}
+	case '[':
+		if literal {
+			return nil
+		}
+		e = &Expr{
+			Location: loc,
+			Type:     ExprArray,
+			Args:     p.parseExprList(),
+		}
+		p.locationEnd(&e.Location)
+	case '{':
+		if literal {
+			return nil
+		}
+		p.incr(1)
+		e = &Expr{
+			Location: loc,
+			Type:     ExprObject,
+			Bindings: map[string]*Binding{},
+		}
+		p.parseResourceContent(nil, e.Bindings)
+		p.parseSpaces()
+		p.locationEnd(&e.Location)
+		if p.get(0) == '}' {
+			p.incr(1)
 		}
 	default:
 		id := p.parseIdentifier()
@@ -250,14 +340,22 @@ loop:
 }
 
 //++ expr_list     -> '(' { expr [ ',' ] } ')'
+//++ expr_array    -> '[' { expr [ ',' ] } ']'
 func (p *Parser) parseExprList() []*Expr {
 	var res []*Expr
-	p.debug("expr_list")
-	if p.get(0) != '(' {
+	var end byte
+	switch p.get(0) {
+	case '(':
+		end = ')'
+	case '[':
+		end = ']'
+	default:
 		return nil
 	}
+	p.debug("expr_list")
 	p.incr(1)
 	for {
+		p.debug("expr(list)")
 		e := p.parseExpr(false)
 		if e != nil {
 			res = append(res, e)
@@ -266,7 +364,7 @@ func (p *Parser) parseExprList() []*Expr {
 		p.parseSpaces()
 		c := p.get(0)
 		switch c {
-		case ')':
+		case end:
 			p.incr(1)
 			fallthrough
 		case 0:
@@ -279,6 +377,7 @@ func (p *Parser) parseExprList() []*Expr {
 
 		if e == nil {
 			p.addError(p.location(), "Expected expression in list")
+			p.debug("expr_list end forced")
 			return res
 		}
 	}
@@ -310,6 +409,7 @@ func (p *Parser) parseString() string {
 
 //++ identifier    -> { ^( ' ' | '\t' | '\n' | '\r' |
 //++                       '{' | '}'  | '('  | ')'  |
+//++                       '[' | ']'  | '+'
 //++                       '=' | ','  | '"'  | '.'  ) }
 func (p *Parser) parseIdentifier() string {
 	var res string
@@ -319,7 +419,7 @@ func (p *Parser) parseIdentifier() string {
 		switch c {
 		default:
 			res += string(c)
-		case 0, ' ', '\t', '\n', '\r', '{', '}', '(', ')', '=', ',', '"', '.':
+		case 0, ' ', '\t', '\n', '\r', '{', '}', '(', ')', '[', ']', '+', '=', ',', '"', '.':
 			return res
 		}
 		p.incr(1)
@@ -396,5 +496,5 @@ func (p *Parser) debug(msg string) {
 			after = p.str[p.n:i]
 		}
 		fmt.Printf("%d:%d:%d: %#v-%#v %s\n", p.l+1, p.c, p.n, before, after, msg)
-	*/
+		//*/
 }

@@ -11,6 +11,18 @@ func TestSyntaxParsing(t *testing.T) {
 	hello() {
 		toto = tata
 		tata = "tutu"
+		slice += "abc"
+		slice += "cde"
+		direct_slice = []
+		object {
+			foo = bar
+		}
+		object {
+			foo = bar
+		}
+		unique_binding = {
+			foo = bar
+		}
 		hello2 {
 			tutu = tonton(concat("abc", "def"), toto)
 		}
@@ -43,7 +55,9 @@ func TestSyntaxParsing(t *testing.T) {
 	p.Parse()
 	log.Printf("%v", p)
 	for _, err := range p.Errors {
-		log.Println(err)
+		log.Println("Error: " + err.Error())
+	}
+	if len(p.Errors) > 0 {
 		t.Fail()
 	}
 }
